@@ -47,7 +47,9 @@ function convolve1d(arr, filter) {
 }
 
 function linspace(a, b, n) {
-    /** Returns an array of n evenly spaced points between a and b. */
+    /**
+     * Returns an array of n evenly spaced points between a and b.
+     */
     var stepsize = (b-a)/(n-1);
     var arr = [];
     arr.length = n;
@@ -64,7 +66,6 @@ function blur(arr, sigma) {
      * Blurs each row of arr with a Gaussian kernel with the given signa.
      * Behavior at the right edge may be non-ideal due to clipping in conv1d.
      */
-
     if (sigma === undefined) {
         sigma = 1;
     }
@@ -83,11 +84,10 @@ function blur(arr, sigma) {
     return arr;
 }
 
-normalize = function(arr) {
+function normalize(arr) {
     /**
-     * Returns a copy of arr whose rows are normalized (sum to 1).
+     * Returns a copy of arr whose rows sum to 1.
      */
-    // normalizes across rows
     var out = $.extend(true, [], arr);
     var i, j, sum;
     for (i=0; i<out.length; i++) {
@@ -103,29 +103,13 @@ normalize = function(arr) {
         }
     }
     return out;
-    // return {'names': obj.names, 'dates': obj.dates, 'counts': d3.transpose(out),
-        // 'words': obj.words};
 }
 
-function stackprep(arr) {
-    /** Prepares an array for use with d3's stacked layout */
-    return arr.map(
-            function(d, i) {
-                return d.map(function(dat, j) { return {x: j, y: dat}; });
-            });
-}
 
-var unstack = function(arr) {
-    return arr.map(
-            function(d, i) {
-                return d.map(function(dat, j) { return dat.y; });
-            });
-}
-
-// var sortSet = function(sort_by, arr, labels, n_to_keep) {
 function argsort(arr) {
-    // sortBy = original.counts.map(function(d) { return d3.sum(d.slice(120, d.length)); });
-
+    /**
+     * Returns indices of sorted elements in arr
+     */
     var zipped, unzipped, j;
     var indices = [];
     for (j=0; j<arr.length; j++) {
@@ -139,196 +123,157 @@ function argsort(arr) {
 //////////////////////////
 // Variable definitions //
 //////////////////////////
-var n = 2, // number of layers
-    m = 4, // number of samples per layer
-    stack = d3.layout.stack();
-var width = 1260,
-    height = 500;
+var MAIN_WIDTH = 1260,
+    MAIN_HEIGHT = 500;
 
-var svg = d3.select("#grapharea").append("svg")
-    .attr("width", width)
-    .attr("height", height);
+var CONTROL_SIZE = 22;
+var PANEL_WIDTH = 500,
+    PANEL_HEIGHT = 500;
 
+var original, dataList;
+var xScale, yScale;
+var colorScale = d3.scale.category20();
+var stackArea = d3.svg.area();
+var stack = d3.layout.stack()
+        .values(function(d) { return d.stacked; });
+
+var panelSVG = d3.select('#controlpanel').append('svg')
+    .attr('width', PANEL_WIDTH)
+    .attr('height', PANEL_HEIGHT);
+var areaSVG = d3.select("#grapharea").append("svg")
+    .attr("width", MAIN_WIDTH)
+    .attr("height", MAIN_HEIGHT);
 var tooltipDiv = d3.select("body").append("div")
     .attr("class", "tooltip")
     .style("opacity", 1e-6);
-
-
-// Hover line.
-var hoverLineGroup = svg.append("g")
-                    .attr("class", "hover-line");
-var hoverLine = hoverLineGroup
-    .append("line")
-        .attr("x1", 10).attr("x2", 10)
-        .attr("y1", 0).attr("y2", height)
-        .style("opacity", 1e-6); // Hide hover line by default.
-
-// objects w/"data" = raw counts, "names"+"dates" = axis labels
-// var original;
-var current;
-
-var processedCounts;
-
-
-// scales to map x and y into drawing area
-var xScale, yScale;
-
-// how to color the results
-var colorScale = d3.scale.category20();
-var stackArea = d3.svg.area();
-
+var reselectControl;
 // TODO make these checkboxes or allow interactivity
+// TODO make it renormalize once a checkbox is clicked
 var doNormalization = true;
-var doRenormalization = true; // should we renormalize after hiding people?
-// not currently used: always sorts ascending (TODO implement)
-// var sortType = 'ascending'; // 'none', 'ascending', or 'descending'
-var processingFunctions = [blur]; // array of fns to call
 
-var wasInitialized = false;
-// topUsers include all users in "top". shownUsers excludes ones that
-// the user clicked to hide
-topUsers = []; // ordered array of users in top N (indices into 1:N)
-var shownUsers = []; // array of booleans (logical index into 1:N)
-var visibleNames = [];
-var nUsersToShow;
-
-
-//////////////////
-// Drawing code //
-//////////////////
 d3.json('chats.json', function(error, raw) {
     if (error) {
         return console.warn(error);
     }
-    _original = original = raw;
-    current = $.extend(true, {}, original);
-    current.counts = preprocessCounts(current.counts, processingFunctions);
-    nUsersToShow = current.names.length;
-    for (var i=0; i<current.names.length; i++) {
-        topUsers[i] = i;
-        shownUsers[i] = true;
-    }
-    topUsers = argsort(current.counts.map(function(d) { return d3.sum(d); }));
-    draw(current, doNormalization);
-});
-
-function preprocessCounts(counts, processingFunctions) {
-    var i;
-    var result = counts;
-    for (i=0; i < processingFunctions.length; i++) {
-        result = processingFunctions[i](result);
-    }
-    return result;
-}
-
-var draw = function(data, doNormalization) {
-    var i, userIdx;
-    var zeros = [];
-    var toDraw = [];
-    for (i=0; i<data.counts[0].length; i++) {
-        zeros[i] = 0;
-    }
-    if (doRenormalization) {
-        for (i=0; i< current.names.length; i++) {
-            if (!shownUsers[i]) {
-                current.counts[i] = zeros;
+    _original = raw;
+    data = $.extend(true, {}, raw);
+    data.counts = blur(data.counts); // TODO make this optional
+    data.normCounts = d3.transpose(normalize(d3.transpose(data.counts)));
+    dataList = [];
+    var sortedUsers = argsort(data.counts.map(function(d) { return d3.sum(d); }));
+    for (var idx=0; idx<data.counts.length; idx++) {
+        i = sortedUsers[idx];
+        var obj = {};
+        for (var attr in data) {
+            if (data.hasOwnProperty(attr) && (attr !== "dates")) {
+                obj[attr] = data[attr][i];
             }
         }
+        var stackData = doNormalization ? obj.normCounts : obj.counts;
+        obj.stacked = stackData.map(function(d, j) { return {"x": j, "y": d}; });
+        obj.hidden = false;
+        obj.hiddenCount = 0;
+        dataList.push(obj);
     }
-    // TODO smarter caching: not every call requires all this stuff
-    if (doNormalization) {
-        data.counts = d3.transpose(normalize(d3.transpose(data.counts)));
+    dataList = stack(dataList);
+    var xScale = d3.scale.linear()
+        .domain([0, raw.dates.length])
+        .range([0, MAIN_WIDTH]);
+
+    var ymax = d3.max(dataList, function(layer) { return d3.max(layer.stacked, function(d) { return d.y0 + d.y; }); });
+    var yScale = d3.scale.linear()
+        .domain([0, ymax])
+        .range([MAIN_HEIGHT, 0]);
+
+    stackArea
+        .x(function(d) { return xScale(d.x); })
+        .y0(function(d) { return yScale(d.y0); })
+        .y1(function(d) { return yScale(d.y0 + d.y); });
+    var paths = areaSVG.selectAll("path")
+        .data(dataList)
+        .enter().append("path")
+        .attr("d", function(d, i) { return stackArea(d.stacked, i); })
+        .style("fill", function(d, i) { return colorScale(i); })
+        .on("mouseover", function() {
+            d3.select(this).style("cursor", "pointer");
+            tooltipDiv.transition()
+                .duration(200)
+                .style("opacity", 1);
+        })
+        .on("mousemove", function(d, i) {
+            // TODO more efficient tooltip
+            var xy = d3.mouse(areaSVG[0][0]);
+            var xCoord = Math.floor(xScale.invert(xy[0]));
+            var numInfo;
+            if (doNormalization) {
+                numInfo = (100 * d.stacked[xCoord].y).toFixed(1) + "%";
+            } else {
+                numInfo = d.stacked[xCoord].y + " words";
+            }
+            tooltipDiv
+                .text(d.names + ", " + data.dates[xCoord] + ": " + numInfo)
+                .style("left", (d3.event.pageX + 15) + "px")
+                .style("top", (d3.event.pageY - 12) + "px");
+        })
+        .on("mouseout", function() {
+            d3.select(this).style("cursor", "normal");
+            tooltipDiv.transition()
+                .duration(200)
+                .style("opacity", 1e-6);
+        })
+        .on("click", function(d, i) {
+            for (var j=0; j<d.stacked.length; j++) {
+                d.stacked[j].y = 0;
+            }
+            d.hidden = true;
+            redraw();
+        });
+    // TODO add a "total volume" plot right below the reference
+    reselectControl = panelSVG.selectAll("g")
+        .data(dataList)
+        .enter().append("g")
+        .attr("class", "reselect-control")
+        .style("visibility", "hidden")
+        .on("click", function(d, i) {
+            var origValues = doNormalization ? d.normCounts : d.counts;
+            for (var j=0; j<d.stacked.length; j++) {
+                d.stacked[j].y = origValues[j];
+            }
+            d.hidden = false;
+            redraw();
+        });
+    var reselectRect = reselectControl.append("rect")
+        .attr("rx", "5px")
+        .attr("ry", "5px")
+        .attr("width", CONTROL_SIZE + "px")
+        .attr("height", CONTROL_SIZE + "px")
+        .style("fill", function(d, i) { return colorScale(i); });
+    var reselectText = reselectControl.append("text")
+        .text(function(d) { return d.names; })
+        .attr("transform", "translate(" + (CONTROL_SIZE*1.2) + "," + (CONTROL_SIZE) + ")")
+        .style("font", CONTROL_SIZE + "px sans-serif")
+        .on("mouseover", function(d, i) {
+            d3.select(this).style("cursor", "pointer");
+        })
+        .on("mouseout", function() {
+            d3.select(this).style("cursor", "normal");
+        });
+});
+
+function redraw() {
+    dataList = stack(dataList);
+    var j, idx = 0;
+    for (j=0; j<dataList.length; j++) {
+        dataList[j].hiddenCount = idx;
+        idx += dataList[j].hidden;
     }
-
-    visibleNames = [];
-
-    for (i=0; i<nUsersToShow; i++) {
-        userIdx = topUsers[i];
-        visibleNames.push(data.names[userIdx]);
-        if (shownUsers[userIdx]) {
-            console.log("showing " + userIdx);
-            toDraw.push(data.counts[userIdx]);
-        } else {
-            console.log("hiding " + userIdx);
-            toDraw.push(zeros);
-        }
-    }
-    console.log(toDraw);
-    toDraw = stack(stackprep(toDraw));
-    setScales(toDraw);
-    if (wasInitialized) {
-        d3.selectAll("path")
-            .data(toDraw)
-            .transition()
-            .duration(1300)
-            .attr("d", stackArea);
-    } else {
-        svg.selectAll("path")
-            .data(toDraw)
-            .enter().append("path")
-            .attr("d", stackArea)
-            .on("mouseover", mouseover) // see below for callback defns
-            .on("mousemove", mousemove)
-            .on("click", mouseclick)
-            .on("mouseout", mouseout)
-            .style("fill", function(d, i) { return colorScale(i); });
-        wasInitialized = true;
-    }
-
-}
-
-// callbacks for mouse actions
-var mouseover = function() {
-  tooltipDiv.transition()
-      .duration(200)
-      .style("opacity", 1);
-}
-
-var mousemove = function(d, i) {
-    var xy = d3.mouse(svg[0][0]);
-    var xCoord = Math.floor(xScale.invert(xy[0]));
-  tooltipDiv
-      .text(visibleNames[i] + ", " + original.dates[xCoord] + ": " + (100 * d[xCoord].y).toFixed(1) + "%")
-      .style("left", (d3.event.pageX + 15) + "px")
-      .style("top", (d3.event.pageY - 12) + "px");
-  hoverLine.attr("x1", xy[0])
-      .attr("x2", xy[0])
-      .attr("y1", yScale(d[xCoord].y0))
-      .attr("y2", yScale(d[xCoord].y0 + d[xCoord].y))
-      .style("opacity", 1);
-}
-
-var mouseout = function() {
-  tooltipDiv.transition()
-      .duration(200)
-      .style("opacity", 1e-6);
-    hoverLine.style("opacity", 1e-6);
-}
-
-var mouseclick = function(d, i) {
-    var userIdx = topUsers[i];
-
-    console.log(i);
-    console.log(userIdx);
-    shownUsers[userIdx] = false;
-    console.log(shownUsers);
-    draw(current, doNormalization);
-}
-
-
-
-var setScales = function(preprocessedInput) {
-    xScale = d3.scale.linear()
-        .domain([0, preprocessedInput[0].length])
-        .range([0, width]);
-
-    yScale = d3.scale.linear()
-        .domain([0, d3.max(preprocessedInput, function(layer) { return d3.max(layer, function(d) { return d.y0 + d.y; }); })])
-        .range([height, 0]);
-
-    stackArea.x(function(d) { return xScale(d.x); })
-             .y0(function(d) { return yScale(d.y0); })
-             .y1(function(d) { return yScale(d.y0 + d.y); });
-
+    areaSVG.selectAll("path")
+        .transition()
+        .duration(1200)
+        .attr("d", function(d, i) { return stackArea(d.stacked, i); });
+    reselectControl
+        .attr("transform", function(d, i) { return "translate(0, " + (d.hiddenCount * CONTROL_SIZE * 1.25) + ")"; })
+        .style("visibility", function(d, i) { return d.hidden ? "visible" : "hidden"; });
 }
 });
+
